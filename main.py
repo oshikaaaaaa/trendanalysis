@@ -22,6 +22,7 @@ from kmodes.kprototypes import KPrototypes
 import random
 from scipy.spatial.distance import hamming
 
+global_rule_count = 0
 def load_data(file_path):
     data = pd.read_csv(file_path)
     return data
@@ -211,14 +212,39 @@ def apply_apriori_to_cluster_transactions(cluster_name, transactions,min_support
     filtered_rules = rules[(rules['lift'] >= min_lift) & (rules['confidence'] >= min_confidence)]
 
     # Sort the filtered rules by lift
-    rules_sorted = rules.sort_values(by='lift', ascending=False)
-    return filtered_rules
+    rules_sorted = rules.sort_values(by=['lift','confidence','support'], ascending=[False,False,False])
+    return rules_sorted
 
-    # Display the top association rules
-    # print(rules_sorted.head(20))
+def filter_based_on_count(rules, count, min_support=0.2, min_lift=1.2, min_confidence=0.8):
+    if count == 0:
+        filtered_rules = rules[(rules['lift'] >= min_lift) & (rules['confidence'] >= min_confidence)]
+    else:
+        max_lift_range = min_lift - count * 0.01 * min_lift
+        # print(max_lift_range)
+        min_lift_range = max_lift_range - 0.2 * min_lift * count
+        # print(min_lift_range)
+        max_confidence_range = min_confidence-count*0.01*min_confidence
+        min_confidence_range = max_confidence_range-count*0.01*min_confidence
+        min_confidence = max_confidence_range
+        min_lift = max_lift_range
+        
+        filtered_rules = rules[(rules['lift'] >= min_lift_range) & (rules['lift'] < max_lift_range) &
+                       (rules['confidence'] >= min_confidence_range) & (rules['confidence'] < max_confidence_range)]
 
 
+    rules_sorted = filtered_rules.sort_values(by=['lift', 'confidence', 'support'], ascending=[False, False, False])
+    # print(rules_sorted['lift'])  # Print lift values for debugging or analysis
+    return rules_sorted
 
+def generate_cluster_transactions(grouped_data):
+
+    cluster_transactions = {}
+
+    for cluster, group_df in grouped_data:
+        transactions = group_df.drop(['Cluster', 'Cluster_name'], axis=1).values.tolist()
+        cluster_transactions[cluster_names[cluster]] = transactions
+
+    return cluster_transactions
 
 from collections import defaultdict
 
@@ -236,14 +262,14 @@ def consolidate_rules(rules):
         rules_df['num_consequents'] = rules_df['consequents'].apply(len)
         rules_df['num_concatenated'] = rules_df['num_antecedents'] + rules_df['num_consequents']
         lis = rules_df['concatenated']
-        rules_df['lift'] = round(rules_df['lift'],2)
+        rules_df['lift'] = round(rules_df['lift'],3)
         grouped_rules = defaultdict(list)
 
         rules_df['concatenated'] = rules_df['concatenated'].apply(lambda x: tuple(sorted(eval(x))) if isinstance(x, str) else tuple())
         grouped = rules_df.groupby('concatenated')
         for category, group in grouped:
         #   print(f"Category: {category}")
-          sorted_group = group.sort_values(by=['num_antecedents', 'num_consequents'], ascending=[False, False])
+          sorted_group = group.sort_values(by=['lift','confidence','support'], ascending=[False, False,False])
           support = sorted_group.iloc[0]['support']
           confidence = sorted_group.iloc[0]['confidence']
           lift = sorted_group.iloc[0]['lift']
@@ -282,7 +308,7 @@ def filter_and_clean_subsets(thorai_rules):
         is_subset_of_any = False
         for j in range(len(list1)):
             if i != j and is_subset(list1[i]['concatenated'], list1[j]['concatenated']):
-                if  abs(list1[i]['lift'] - list1[j]['lift']) <= 0.4 :
+                if  abs(list1[i]['lift'] - list1[j]['lift']) <= 0.1 :
                     is_subset_of_any = True
                     break
         if not is_subset_of_any:
@@ -290,6 +316,41 @@ def filter_and_clean_subsets(thorai_rules):
     return filtered_sets
 
 
+def manage_rules(important_rules_by_cluster,count=0):
+    global global_rule_count
+    print("COunt", global_rule_count)
+
+    filtered_dict = {}
+    
+    # Collect all rules from important_rules_by_cluster
+    print("start------------------")
+    for cluster, rules in important_rules_by_cluster.items():
+        # print(cluster)
+        # print(rules)
+        filtered_rules = filter_based_on_count(rules, global_rule_count)
+        if cluster in filtered_dict:
+            filtered_dict.append(filtered_rules)
+        else:
+            filtered_dict[cluster] = filtered_rules
+                   
+    # print(filtered_dict)
+    thorai_rules = consolidate_rules(filtered_dict)
+    filtered_rules = filter_and_clean_subsets(thorai_rules)
+    # print(thorai_rules)
+    for rule in filtered_rules:
+        print(rule)
+    global_rule_count+= 1
+
+
+
+    return thorai_rules
+    # return filtered_rules
+
+def call_rules(important_rules_by_cluster):
+    count+= 1
+    manage_rules(important_rules_by_cluster,count)
+
+    return 
 if __name__ == '__main__':
     file_path = 'csvfiles/diabetes.csv'
 
@@ -309,23 +370,18 @@ if __name__ == '__main__':
     clustered_data = binning(data)
     grouped_data = clustered_data.groupby('Cluster')
 
-    cluster_transactions = {}
-    for cluster, group_df in grouped_data:
-        transactions = group_df.drop(['Cluster', 'Cluster_name'], axis=1).values.tolist()
-        cluster_transactions[cluster_names[cluster]] = transactions
-     
+    cluster_transactions = generate_cluster_transactions(grouped_data)
     important_rules_by_cluster = {}
 
     for cluster, transactions in cluster_transactions.items():
         # print(cluster)
         important_rules = apply_apriori_to_cluster_transactions(cluster, transactions)
         important_rules_by_cluster[cluster] = important_rules
-    thorai_rules = consolidate_rules(important_rules_by_cluster)
-    # print(thorai_rules)
+    
+    for i in range(1,4):
+        manage_rules(important_rules_by_cluster)
 
-    filtered_rules = filter_and_clean_subsets(thorai_rules)
-    for rule in filtered_rules:
-        print(rule)
+   
       
          
         
